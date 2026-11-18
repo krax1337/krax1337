@@ -2,16 +2,14 @@
 """Generate the profile README artwork (assets/*.svg).
 
 Every image is written twice, once per GitHub colour scheme, and the README
-picks one with <picture>. Live numbers (contribution calendar, stars,
-languages) come from the GitHub GraphQL API.
+picks one with <picture>. The contribution calendar comes from the GitHub
+GraphQL API.
 
     GH_TOKEN=$(gh auth token) python3 scripts/build.py
 """
 
 import json
 import os
-import random
-import textwrap
 import urllib.request
 from datetime import date
 from html import escape
@@ -48,33 +46,6 @@ THEMES = {
     },
 }
 
-PROJECTS = [
-    {
-        "repo": "brownnoise",
-        "desc": "Endless, gapless white, pink and brown noise, generated live in your terminal.",
-        "tag": "CLI",
-        "art": "noise",
-    },
-    {
-        "repo": "mcp-server-zenmoney",
-        "desc": "Talk to your money: an MCP server that lets AI agents read and update ZenMoney finances.",
-        "tag": "MCP server",
-        "art": "bars",
-    },
-    {
-        "repo": "notation-aws-verifier",
-        "desc": "Kyverno extension that admits only AWS Signer / Notation signed images to a cluster.",
-        "tag": "Kubernetes",
-        "art": "shield",
-    },
-    {
-        "repo": "omp-auto-effort-floor",
-        "desc": "A minimum reasoning effort for the auto thinking mode of the omp coding agent.",
-        "tag": "omp plugin",
-        "art": "floor",
-    },
-]
-
 STACK = [
     ["Kubernetes", "Talos", "Cilium", "Helm", "Argo CD", "Terraform", "Ansible", "Grafana"],
     ["Prometheus", "AWS", "Cloudflare", "GitHub Actions", "Go", "Rust", "TypeScript", "Python"],
@@ -91,11 +62,6 @@ def fetch():
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         raise SystemExit("set GH_TOKEN (e.g. GH_TOKEN=$(gh auth token))")
-    repos = "\n".join(
-        f'r{i}: repository(owner: "{LOGIN}", name: "{p["repo"]}") '
-        "{ stargazerCount primaryLanguage { name color } }"
-        for i, p in enumerate(PROJECTS)
-    )
     query = f"""{{
       user(login: "{LOGIN}") {{
         contributionsCollection {{ contributionCalendar {{
@@ -103,7 +69,6 @@ def fetch():
           weeks {{ contributionDays {{ date contributionCount weekday }} }}
         }} }}
       }}
-      {repos}
     }}"""
     request = urllib.request.Request(
         "https://api.github.com/graphql",
@@ -135,17 +100,11 @@ def gradient(gid, acc, x1, x2):
     )
 
 
-def frame(w, h, t, label, defs, body, radius=14, gutter=(0, 0)):
-    """Rounded surface with a hairline border; body is clipped to it.
-
-    gutter adds transparent space left and right, so images laid out edge to
-    edge in the README still get a gap between them.
-    """
-    left, right = gutter
+def frame(w, h, t, label, defs, body, radius=14):
+    """Rounded surface with a hairline border; body is clipped to it."""
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{-left} 0 {w + left + right} {h}" '
-        f'width="{w + left + right}" height="{h}" role="img" aria-label="{escape(label)}">'
-        f"<title>{escape(label)}</title>"
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" '
+        f'role="img" aria-label="{escape(label)}"><title>{escape(label)}</title>'
         f'<defs><clipPath id="clip"><rect width="{w}" height="{h}" rx="{radius}"/></clipPath>{defs}</defs>'
         f'<g clip-path="url(#clip)"><rect width="{w}" height="{h}" fill="{t["surface"]}"/>{body}</g>'
         f'<rect x=".5" y=".5" width="{w - 1}" height="{h - 1}" rx="{radius - .5}" fill="none" '
@@ -272,79 +231,6 @@ def hero(t):
         f"{roles}"
     )
     return frame(w, h, t, "Asanali Bulatov, Senior DevOps / Site Reliability Engineer", defs, body, radius=18)
-
-
-# --- project cards ------------------------------------------------------------
-
-def art(kind, t):
-    """Small illustration in the top-right corner of a card (x 296..404, y 20..66)."""
-    a1, a2, a3 = t["acc"]
-    x0, x1, top, base = 296, 404, 20, 66
-    if kind == "noise":
-        rng, y, points = random.Random(7), 0.0, []
-        for i in range(73):
-            y = max(-1.0, min(1.0, y * 0.94 + rng.uniform(-0.42, 0.42)))
-            points.append((x0 + (x1 - x0) * i / 72, (top + base) / 2 - y * 21))
-        path = " ".join(f"{x:.1f},{py:.1f}" for x, py in points)
-        return (
-            f'<polygon points="{x0},{base} {path} {x1},{base}" fill="url(#acc)" opacity=".1"/>'
-            f'<polyline points="{path}" fill="none" stroke="url(#acc)" stroke-width="1.6" '
-            'stroke-linejoin="round" stroke-linecap="round"/>'
-        )
-    if kind == "bars":
-        heights = [14, 22, 17, 30, 25, 38, 46]
-        return "".join(
-            f'<rect x="{x0 + 4 + i * 15}" y="{base - v}" width="10" height="{v}" rx="2.5" fill="url(#acc)" '
-            f'opacity="{0.3 + 0.7 * i / 6:.2f}"/>'
-            for i, v in enumerate(heights)
-        )
-    if kind == "shield":
-        return (
-            f'<text x="358" y="40" font-family="{MONO}" font-size="9.5" fill="{t["muted"]}" text-anchor="end">'
-            "sha256:9f2c…e41a</text>"
-            f'<text x="358" y="55" font-family="{MONO}" font-size="9.5" fill="{a1}" text-anchor="end">verified</text>'
-            '<path d="M384 20l19 7v14c0 12-8 20-19 25-11-5-19-13-19-25V27z" fill="url(#acc)" fill-opacity=".12" '
-            'stroke="url(#acc)" stroke-width="1.6" stroke-linejoin="round"/>'
-            '<path d="M375.5 43.5l6 6 11.5-12.5" fill="none" stroke="url(#acc)" stroke-width="2.2" '
-            'stroke-linecap="round" stroke-linejoin="round"/>'
-        )
-    # floor: efforts below the dashed line are lifted up to it
-    floor, out = 24, ""
-    for i, v in enumerate([10, 34, 16, 42, 8, 28, 20, 38, 12]):
-        x = x0 + 2 + i * 12
-        if v < floor:
-            out += f'<rect x="{x}" y="{base - floor}" width="7" height="{floor - v}" rx="2" fill="{a2}" opacity=".9"/>'
-        out += f'<rect x="{x}" y="{base - v}" width="7" height="{v}" rx="2" fill="{t["muted"]}" opacity=".45"/>'
-    return out + (
-        f'<line x1="{x0 - 4}" y1="{base - floor}" x2="{x1 + 2}" y2="{base - floor}" stroke="{a3}" '
-        'stroke-width="1.2" stroke-dasharray="3 3"/>'
-    )
-
-
-def card(project, repo, t, gutter):
-    w, h = 428, 148
-    lang = repo["primaryLanguage"] or {"name": "", "color": t["muted"]}
-    lines = textwrap.wrap(project["desc"], 56)[:2]
-    desc = "".join(
-        f'<text x="24" y="{90 + 19 * i}" font-family="{SANS}" font-size="13" fill="{t["muted"]}">{escape(s)}</text>'
-        for i, s in enumerate(lines)
-    )
-    meta = (
-        f'<circle cx="29" cy="{h - 22.5}" r="5" fill="{lang["color"]}"/>'
-        f'<text x="40" y="{h - 18}" font-family="{SANS}" font-size="12" fill="{t["muted"]}">{escape(lang["name"])}'
-    )
-    if repo["stargazerCount"]:
-        meta += f'<tspan dx="14" fill="{t["acc"][1]}">★</tspan><tspan dx="4">{repo["stargazerCount"]}</tspan>'
-    meta += "</text>"
-    body = (
-        f'<rect width="{w}" height="3" fill="url(#acc)"/>{art(project["art"], t)}'
-        f'<text x="24" y="50" font-family="{MONO}" font-size="15.5" font-weight="700" fill="{t["fg"]}">'
-        f'{escape(project["repo"])}</text>{desc}{meta}'
-        f'<text x="{w - 24}" y="{h - 18}" font-family="{MONO}" font-size="11" fill="{t["muted"]}" '
-        f'text-anchor="end">{escape(project["tag"])}</text>'
-    )
-    label = f'{project["repo"]}: {project["desc"]}'
-    return frame(w, h, t, label, gradient("acc", t["acc"], 0, w), body, gutter=gutter)
 
 
 # --- stack --------------------------------------------------------------------
@@ -476,10 +362,6 @@ def main():
             "stack": stack(t, icons),
             "activity": activity(calendar, t),
         }
-        for i, project in enumerate(PROJECTS):
-            # Two cards per README row: the gap between them is half from each card.
-            gutter = (4, 0) if i % 2 else (0, 4)
-            files[f'card-{project["repo"]}'] = card(project, data[f"r{i}"], t, gutter)
         for stem, svg in files.items():
             (ASSETS / f"{stem}-{name}.svg").write_text(svg)
     print(f"wrote {len(list(ASSETS.glob('*.svg')))} files to {ASSETS}")
