@@ -46,9 +46,18 @@ THEMES = {
     },
 }
 
+# Bottom layer first. marks are line paths on the 128-unit top face of a layer.
 STACK = [
-    ["Kubernetes", "Talos", "Cilium", "Helm", "Argo CD", "Terraform", "Ansible", "Grafana"],
-    ["Prometheus", "AWS", "Cloudflare", "GitHub Actions", "Go", "Rust", "TypeScript", "Python"],
+    ("host", ["AWS", "Cloudflare", "Talos"],
+     [[(k, 8), (k, 120)] for k in (32, 64, 96)] + [[(8, k), (120, k)] for k in (32, 64, 96)]),
+    ("run", ["Kubernetes", "Cilium", "Helm"],
+     [[(x, y), (x + 14, y), (x + 14, y + 14), (x, y + 14), (x, y)] for x in (25, 57, 89) for y in (25, 57, 89)]),
+    ("ship", ["Terraform", "Ansible", "Argo CD", "GitHub Actions"],
+     [p for y in (36, 64, 92) for p in ([(22, y), (104, y)], [(92, y - 10), (104, y), (92, y + 10)])]),
+    ("observe", ["Prometheus", "Grafana"],
+     [[(64 - r, 64 - r), (64 + r, 64 - r), (64 + r, 64 + r), (64 - r, 64 + r), (64 - r, 64 - r)] for r in (12, 30, 48)]),
+    ("write", ["Go", "Rust", "TypeScript", "Python"],
+     [[(x, y), (x + n, y)] for y, x, n in ((26, 18, 58), (45, 32, 74), (64, 32, 42), (83, 32, 60), (102, 18, 34))]),
 ]
 
 ROLES = [
@@ -235,28 +244,61 @@ def hero(t):
 
 # --- stack --------------------------------------------------------------------
 
-def stack(t, icons):
-    w, gap, chip_h, char = 880, 7, 34, 7.25
-    out = ""
-    for r, names in enumerate(STACK):
-        chips = [(name, 12 + 16 + 8 + len(name) * char + 12) for name in names]
-        used = sum(cw for _, cw in chips) + gap * (len(chips) - 1)
-        x, y = (w - used) / 2, r * (chip_h + gap)
-        for name, cw in chips:
-            out += (
-                f'<rect x="{x + .5:.1f}" y="{y + .5}" width="{cw - 1:.1f}" height="{chip_h - 1}" rx="9" '
-                f'fill="{t["surface"]}" stroke="{t["border"]}"/>'
-                f'<path transform="translate({x + 12:.1f} {y + 9}) scale(.6667)" fill="{t["fg"]}" d="{icons[name]}"/>'
-                f'<text x="{x + 36:.1f}" y="{y + 21.5}" font-family="{MONO}" font-size="12" fill="{t["fg"]}">'
-                f"{escape(name)}</text>"
-            )
-            x += cw + gap
-    h = len(STACK) * (chip_h + gap) - gap
-    label = "Stack: " + ", ".join(name for names in STACK for name in names)
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img" '
-        f'aria-label="{escape(label)}"><title>{escape(label)}</title>{out}</svg>\n'
+def stack(t):
+    """The stack as an exploded isometric drawing: one slab per layer, labelled on the right."""
+    w, h = 880, 348
+    side, depth, gap = 140, 12, 54
+    kx, ky = 0.866, 0.21
+    ox, oy = 196, 30 + gap * (len(STACK) - 1)
+    half = side * kx
+    text_x = ox + half + 96
+
+    def at(x, y, z, drop=0):
+        return f"{ox + (x - y) * kx:.1f},{oy + (x + y) * ky - z + drop:.1f}"
+
+    rows = [oy + side * ky - gap * i for i in range(len(STACK))]
+    out = "".join(
+        f'<line x1="{x:.1f}" y1="{rows[0]:.1f}" x2="{x:.1f}" y2="{rows[-1]:.1f}" stroke="{t["muted"]}" '
+        'stroke-opacity=".4" stroke-dasharray="2 4"/>'
+        for x in (ox - half, ox + half)
     )
+    labels = ""
+    for i, (name, tools, marks) in enumerate(STACK):
+        z, color, y = gap * i, mix(t["acc"], 1 - i / (len(STACK) - 1)), rows[i]
+        a, b, c, d = at(0, 0, z), at(side, 0, z), at(side, side, z), at(0, side, z)
+        b2, c2, d2 = at(side, 0, z, depth), at(side, side, z, depth), at(0, side, z, depth)
+        top = f"{a} {b} {c} {d}"
+        lines = "".join(
+            f'<polyline points="{" ".join(at(x * side / 128, py * side / 128, z) for x, py in path)}" fill="none" stroke="{color}" '
+            'stroke-opacity=".6" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round"/>'
+            for path in marks
+        )
+        out += (
+            f'<polygon points="{a} {b} {b2} {c2} {d2} {d}" fill="{t["surface"]}"/>'
+            f'<polygon points="{d} {c} {c2} {d2}" fill="{color}" fill-opacity=".34"/>'
+            f'<polygon points="{c} {b} {b2} {c2}" fill="{color}" fill-opacity=".2"/>'
+            f'<polygon points="{top}" fill="{color}" fill-opacity=".1"/>'
+            f'<polygon class="pulse" style="animation-delay:{i * 0.45:.2f}s" points="{top}" fill="{color}" opacity="0"/>'
+            f'{lines}<path d="M{a} L{b} L{c} L{d} Z M{d} L{d2} L{c2} L{b2} L{b} M{c} L{c2}" fill="none" '
+            f'stroke="{color}" stroke-width="1.2" stroke-linejoin="round"/>'
+        )
+        labels += (
+            f'<circle cx="{ox + half:.1f}" cy="{y:.1f}" r="2.6" fill="{color}"/>'
+            f'<line x1="{ox + half + 8:.1f}" y1="{y:.1f}" x2="{text_x - 12:.1f}" y2="{y:.1f}" stroke="{t["muted"]}" '
+            'stroke-opacity=".55"/>'
+            f'<text x="{text_x:.1f}" y="{y + 4.5:.1f}" font-family="{MONO}" font-size="11" fill="{color}">{i + 1:02d}</text>'
+            f'<text x="{text_x + 28:.1f}" y="{y + 5:.1f}" font-family="{SANS}" font-size="15" font-weight="700" '
+            f'fill="{t["fg"]}">{name}</text>'
+            f'<text x="{text_x + 28:.1f}" y="{y + 23:.1f}" font-family="{MONO}" font-size="12.5" fill="{t["muted"]}">'
+            f'{escape(" · ".join(tools))}</text>'
+        )
+    defs = (
+        "<style>.pulse{animation:pulse 6s ease-out infinite}"
+        "@keyframes pulse{0%,30%,100%{opacity:0}7%{opacity:.42}}"
+        "@media (prefers-reduced-motion:reduce){.pulse{animation:none}}</style>"
+    )
+    label = "The stack, bottom up: " + "; ".join(f'{name}: {", ".join(tools)}' for name, tools, _ in STACK)
+    return frame(w, h, t, label, defs, out + labels)
 
 
 # --- activity -----------------------------------------------------------------
@@ -353,13 +395,12 @@ def activity(calendar, t):
 
 def main():
     data = fetch()
-    icons = json.loads((ROOT / "scripts" / "icons.json").read_text())
     calendar = data["user"]["contributionsCollection"]["contributionCalendar"]
     ASSETS.mkdir(exist_ok=True)
     for name, t in THEMES.items():
         files = {
             "hero": hero(t),
-            "stack": stack(t, icons),
+            "stack": stack(t),
             "activity": activity(calendar, t),
         }
         for stem, svg in files.items():

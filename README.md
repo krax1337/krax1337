@@ -23,11 +23,11 @@ I run Kubernetes platforms and the delivery pipelines around them. Currently at 
 - [avarayr/shamelectron](https://github.com/avarayr/shamelectron/pull/102): track RedisInsight
 - [nirmata/kyverno-notation-aws](https://github.com/nirmata/kyverno-notation-aws): picked up maintenance as [notation-aws-verifier](https://github.com/krax1337/notation-aws-verifier)
 
-### Toolbox
+### The stack
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/stack-dark.svg">
-  <img src="assets/stack-light.svg" width="100%" alt="Kubernetes, Talos, Cilium, Helm, Argo CD, Terraform, Ansible, Grafana, Prometheus, AWS, Cloudflare, GitHub Actions, Go, Rust, TypeScript, Python">
+  <img src="assets/stack-light.svg" width="100%" alt="The stack, bottom up. Host: AWS, Cloudflare, Talos. Run: Kubernetes, Cilium, Helm. Ship: Terraform, Ansible, Argo CD, GitHub Actions. Observe: Prometheus, Grafana. Write: Go, Rust, TypeScript, Python.">
 </picture>
 
 ### Last 12 months
