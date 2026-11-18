@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the profile README artwork (assets/*.svg).
+"""Draw the profile README artwork (assets/*.svg) as whiteboard sketches.
 
 Every image is written twice, once per GitHub colour scheme, and the README
 picks one with <picture>. The contribution calendar comes from the GitHub
@@ -9,62 +9,53 @@ GraphQL API.
 """
 
 import json
+import math
 import os
 import urllib.request
+import zlib
 from datetime import date
-from html import escape
-from math import cos, pi, sin
 from pathlib import Path
+
+from sketch import Pen, Sketch, smooth, text_width
 
 LOGIN = "krax1337"
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets"
+MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 
-SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif"
-MONO = "ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace"
-
+# Excalidraw's pens and fills. levels shade the calendar from a quiet day to a busy one.
 THEMES = {
-    "dark": {
-        "surface": "#0f141b",
-        "border": "#232b36",
-        "fg": "#e6edf3",
-        "muted": "#8b949e",
-        "dot": "#2b3440",
-        "empty": 0.07,
-        "glow": 0.22,
-        "acc": ("#34d399", "#22d3ee", "#818cf8"),
-    },
     "light": {
-        "surface": "#f8fafc",
-        "border": "#d8dee4",
-        "fg": "#1f2328",
-        "muted": "#59636e",
-        "dot": "#c9d1d9",
-        "empty": 0.07,
-        "glow": 0.16,
-        "acc": ("#059669", "#0891b2", "#4f46e5"),
+        "ink": "#1e1e1e", "soft": "#868e96", "grid": "#ced4da",
+        "red": "#e03131", "blue": "#1971c2", "green": "#2f9e44",
+        "sky": "#a5d8ff", "sun": "#ffec99", "mint": "#b2f2bb", "lilac": "#d0bfff", "ash": "#ced4da",
+        "note": "#fff3bf", "levels": ("#8ce99a", "#51cf66", "#37b24d", "#2b8a3e"),
+    },
+    "dark": {
+        "ink": "#e3e3e3", "soft": "#8b949e", "grid": "#3d444d",
+        "red": "#ff8787", "blue": "#74c0fc", "green": "#69db7c",
+        "sky": "#1c5d99", "sun": "#8f6f00", "mint": "#2b7a3d", "lilac": "#5a3fb5", "ash": "#495057",
+        "note": "#4a3d07", "levels": ("#1f6b33", "#2f9e44", "#51cf66", "#8ce99a"),
     },
 }
 
-# Bottom layer first. marks are line paths on the 128-unit top face of a layer.
-STACK = [
-    ("host", ["AWS", "Cloudflare", "Talos"],
-     [[(k, 8), (k, 120)] for k in (32, 64, 96)] + [[(8, k), (120, k)] for k in (32, 64, 96)]),
-    ("run", ["Kubernetes", "Cilium", "Helm"],
-     [[(x, y), (x + 14, y), (x + 14, y + 14), (x, y + 14), (x, y)] for x in (25, 57, 89) for y in (25, 57, 89)]),
-    ("ship", ["Terraform", "Ansible", "Argo CD", "GitHub Actions"],
-     [p for y in (36, 64, 92) for p in ([(22, y), (104, y)], [(92, y - 10), (104, y), (92, y + 10)])]),
-    ("observe", ["Prometheus", "Grafana"],
-     [[(64 - r, 64 - r), (64 + r, 64 - r), (64 + r, 64 + r), (64 - r, 64 + r), (64 - r, 64 - r)] for r in (12, 30, 48)]),
-    ("write", ["Go", "Rust", "TypeScript", "Python"],
-     [[(x, y), (x + n, y)] for y, x, n in ((26, 18, 58), (45, 32, 74), (64, 32, 42), (83, 32, 60), (102, 18, 34))]),
+CHECKLIST = [
+    (True, "k8s on bare metal + cloud"),
+    (True, "GitOps, IaC, signed images"),
+    (True, "small tools: Go, Rust, TS"),
+    (False, "sleep"),
 ]
 
-ROLES = [
-    "Kubernetes on bare metal and in the cloud",
-    "GitOps, IaC and signed supply chains",
-    "Small sharp tools in Go, Rust and TypeScript",
+# Left to right; they all stand on HOST.
+STACK = [
+    ("write", "sky", ["Go", "Rust", "TypeScript", "Python"]),
+    ("ship", "sun", ["Terraform", "Ansible", "Argo CD", "GitHub Actions"]),
+    ("run", "mint", ["Kubernetes", "Cilium", "Helm"]),
+    ("observe", "lilac", ["Prometheus", "Grafana"]),
 ]
+HOST = ["AWS", "Cloudflare", "Talos"]
+# Scribbled above one column; it needs a short one to leave room.
+STACK_NOTE = ("observe", ["tells me before", "the users do"])
 
 
 def fetch():
@@ -88,320 +79,251 @@ def fetch():
         body = json.load(response)
     if body.get("errors"):
         raise SystemExit(f"GitHub API: {body['errors']}")
-    return body["data"]
+    return body["data"]["user"]["contributionsCollection"]["contributionCalendar"]
 
 
-def mix(stops, t):
-    """Colour at t in [0, 1] along a list of hex stops."""
-    t = min(max(t, 0.0), 1.0) * (len(stops) - 1)
-    i = min(int(t), len(stops) - 2)
-    a, b = (tuple(int(s[k:k + 2], 16) for k in (1, 3, 5)) for s in stops[i:i + 2])
-    return "#" + "".join(f"{round(x + (y - x) * (t - i)):02x}" for x, y in zip(a, b))
+def underline(s, x, y, width, weight=2.4):
+    s.curve([(x, y), (x + width * 0.5, y - 4), (x + width + 4, y + 1)], s.c["red"], weight)
 
 
-def gradient(gid, acc, x1, x2):
-    stops = "".join(
-        f'<stop offset="{i / (len(acc) - 1):g}" stop-color="{c}"/>' for i, c in enumerate(acc)
+# --- hero ---------------------------------------------------------------------
+
+ROW = 290  # centre line of the pipeline
+
+
+def sticky_note(s, x, y):
+    w, h = 276, 154
+    s.raw(f'<g transform="rotate(2.5 {x + w / 2} {y + h / 2})">')
+    s.rect(x, y, w, h, solid=s.c["note"], radius=3, width=1.5)
+    for i, (done, line) in enumerate(CHECKLIST):
+        base = y + 40 + i * 31
+        s.rect(x + 18, base - 14, 15, 15, radius=2, width=1.4)
+        if done:
+            s.line(x + 21, base - 8, x + 25.5, base - 2, s.c["green"], 2.4)
+            s.line(x + 25.5, base - 2, x + 39, base - 21, s.c["green"], 2.4)
+        s.text(line, x + 46, base, 17)
+    s.raw("</g>")
+
+
+def figure(s, x, ground):
+    """Stick figure with headphones, standing on ground."""
+    head = ground - 78
+    s.ellipse(x, head, 24, 24)
+    s.curve([(x - 13, head + 2), (x - 10, head - 12), (x + 10, head - 12), (x + 13, head + 2)], width=2.6)
+    for side in (-13.5, 13.5):
+        s.line(x + side, head - 2, x + side, head + 7, width=5)
+    s.line(x, head + 12, x, ground - 28)
+    s.line(x, ground - 56, x - 17, ground - 36)
+    s.line(x, ground - 56, x + 22, ground - 46)
+    s.line(x, ground - 28, x - 13, ground)
+    s.line(x, ground - 28, x + 13, ground)
+
+
+def stage(s, x, label, fill):
+    """Shaded box on the pipeline. Returns its right edge."""
+    w = text_width(label, 22) + 44
+    s.rect(x, ROW - 27, w, 54, fill=s.c[fill])
+    s.text(label, x + w / 2, ROW + 8, 22, anchor="middle")
+    return x + w
+
+
+def hop(s, x1, x2, label):
+    s.arrow([(x1 + 6, ROW), (x2 - 6, ROW)])
+    s.text(label, (x1 + x2) / 2, ROW - 11, 15, s.c["soft"], anchor="middle")
+
+
+def hero(c):
+    s = Sketch(880, 440, c, seed=11, tempo=0.45)
+
+    width = s.text("Asanali Bulatov", 8, 82, 58, wobble=1, pace=0.09)
+    underline(s, 10, 101, width)
+    s.text("Senior DevOps / Site Reliability Engineer", 10, 138, 23)
+    s.text(f"{LOGIN} · Kazakhstan · UTC+5", 10, 167, 17, c["soft"])
+
+    sticky_note(s, 584, 26)
+
+    figure(s, 56, ROW + 42)
+    s.text("me", 56, ROW + 66, 17, anchor="middle")
+    hop(s, 84, 156, "git push")
+    edge = stage(s, 156, "git", "sky")
+    hop(s, edge, edge + 72, "build")
+    edge = stage(s, edge + 72, "CI", "sun")
+    hop(s, edge, edge + 126, "signed image")
+    edge = stage(s, edge + 126, "registry", "lilac")
+    cluster = edge + 62
+    hop(s, edge, cluster, "sync")
+    s.rect(cluster, ROW - 58, 160, 116, dash="8 9", radius=14)
+    s.text("cluster", cluster + 14, ROW - 34, 17)
+    for i in range(3):
+        s.rect(cluster + 15 + i * 46, ROW - 14, 38, 50, fill=c["mint"], gap=6)
+
+    back = [(cluster + 12, ROW + 62), (cluster - 60, ROW + 108), (400, ROW + 126), (160, ROW + 108), (90, ROW + 48)]
+    s.arrow(back)
+    s.text("metrics, logs, alerts (ideally none)", 400, ROW + 114, 16, c["soft"], anchor="middle")
+
+    s.text("unsigned? rejected.", edge - 136, ROW + 62, 16, c["red"])
+    s.arrow([(edge + 14, ROW + 54), (edge + 32, ROW + 40), (edge + 33, ROW + 12)], c["red"], 1.6, head=8)
+    s.text("boring on purpose", 866, ROW + 94, 16, c["blue"], anchor="end")
+    s.arrow([(cluster + 104, ROW + 80), (cluster + 102, ROW + 64)], c["blue"], 1.6, head=8)
+
+    # A commit doing the rounds once the drawing is finished.
+    route = f"M86 {ROW}L{cluster} {ROW}L{cluster + 50} {ROW + 20}L" + smooth(back)[1:] + f"L86 {ROW}"
+    begin = f"{s.clock + 0.8:.1f}s"
+    s.raw(
+        f'<path class="live" d="{Pen(5).ellipse(0, 0, 11, 11)[0]}" fill="{c["red"]}" stroke="{c["ink"]}" '
+        f'stroke-width="1.2" opacity="0"><set attributeName="opacity" to="1" begin="{begin}"/>'
+        f'<animateMotion dur="12s" begin="{begin}" repeatCount="indefinite" path="{route}"/></path>'
     )
-    return (
-        f'<linearGradient id="{gid}" gradientUnits="userSpaceOnUse" '
-        f'x1="{x1}" y1="0" x2="{x2}" y2="0">{stops}</linearGradient>'
+    return s.svg(
+        "Asanali Bulatov, Senior DevOps / Site Reliability Engineer. Whiteboard sketch: me, git push, git, "
+        "build, CI, signed image, registry, sync, cluster; metrics, logs and alerts come back to me."
     )
-
-
-def frame(w, h, t, label, defs, body, radius=14):
-    """Rounded surface with a hairline border; body is clipped to it."""
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" '
-        f'role="img" aria-label="{escape(label)}"><title>{escape(label)}</title>'
-        f'<defs><clipPath id="clip"><rect width="{w}" height="{h}" rx="{radius}"/></clipPath>{defs}</defs>'
-        f'<g clip-path="url(#clip)"><rect width="{w}" height="{h}" fill="{t["surface"]}"/>{body}</g>'
-        f'<rect x=".5" y=".5" width="{w - 1}" height="{h - 1}" rx="{radius - .5}" fill="none" '
-        f'stroke="{t["border"]}"/></svg>\n'
-    )
-
-
-# --- hero -------------------------------------------------------------------
-
-def hero(t):
-    w, h = 880, 300
-    a1, a2, a3 = t["acc"]
-    cx, cy, ring_r = 690, 150, 88
-
-    hub = (cx, cy)
-    ring = [
-        (round(cx + ring_r * cos(pi * (a - 90) / 180), 1), round(cy + ring_r * sin(pi * (a - 90) / 180), 1))
-        for a in range(0, 360, 60)
-    ]
-    outer = {"registry": (838, 62), "edge": (846, 178), "metrics": (806, 266), "alerts": (566, 262), "git": (548, 52)}
-    links = [(1, "registry"), (1, "edge"), (2, "edge"), (2, "metrics"), (3, "metrics"), (4, "alerts"), (5, "git"), (0, "git")]
-
-    def line(p, q, opacity):
-        return (
-            f'<line x1="{p[0]}" y1="{p[1]}" x2="{q[0]}" y2="{q[1]}" stroke="url(#acc)" '
-            f'stroke-width="1.2" stroke-opacity="{opacity}"/>'
-        )
-
-    edges = "".join(line(hub, n, 0.5) for n in ring)
-    edges += "".join(line(ring[i], ring[(i + 1) % 6], 0.34) for i in range(6))
-    edges += "".join(line(ring[i], outer[o], 0.22) for i, o in links)
-
-    routes = [
-        ([outer["git"], ring[5], hub], 3.6, 0.0),
-        ([hub, ring[1], outer["registry"]], 3.2, 0.9),
-        ([outer["edge"], ring[2], hub], 3.4, 1.7),
-        ([hub, ring[3], outer["metrics"]], 3.8, 0.4),
-        ([hub, ring[4], outer["alerts"]], 4.2, 2.3),
-        ([ring[0], ring[1], ring[2], ring[3]], 5.0, 1.2),
-        ([ring[3], ring[4], ring[5], ring[0]], 5.0, 3.1),
-        ([outer["git"], ring[0], hub], 4.0, 2.6),
-    ]
-    packets = ""
-    for i, (points, dur, begin) in enumerate(routes):
-        path = "M" + " L".join(f"{x},{y}" for x, y in points)
-        packets += (
-            f'<circle r="2.8" fill="{mix(t["acc"], i / (len(routes) - 1))}" opacity="0">'
-            f'<animateMotion dur="{dur}s" begin="{begin}s" repeatCount="indefinite" path="{path}"/>'
-            f'<animate attributeName="opacity" dur="{dur}s" begin="{begin}s" repeatCount="indefinite" '
-            f'values="0;1;1;0" keyTimes="0;.12;.88;1"/></circle>'
-        )
-
-    nodes = "".join(
-        f'<circle cx="{x}" cy="{y}" r="6.5" fill="{t["surface"]}" stroke="url(#acc)" stroke-width="1.5"/>'
-        f'<circle cx="{x}" cy="{y}" r="2.2" fill="url(#acc)"/>'
-        for x, y in ring
-    )
-    for name, (x, y) in outer.items():
-        left = x < cx
-        nodes += (
-            f'<circle cx="{x}" cy="{y}" r="4" fill="{t["surface"]}" stroke="{t["muted"]}" stroke-width="1.2"/>'
-            f'<text x="{x + (9 if left else -9)}" y="{y + 3.5}" font-family="{MONO}" font-size="10" '
-            f'fill="{t["muted"]}" text-anchor="{"start" if left else "end"}">{name}</text>'
-        )
-    hexagon = " ".join(
-        f"{cx + 17 * cos(pi * (a - 90) / 180):.1f},{cy + 17 * sin(pi * (a - 90) / 180):.1f}" for a in range(0, 360, 60)
-    )
-    pulses = "".join(
-        f'<circle cx="{cx}" cy="{cy}" r="17" fill="none" stroke="{a2}" stroke-width="1.2" opacity="0">'
-        f'<animate attributeName="r" values="17;46" dur="3.2s" begin="{b}s" repeatCount="indefinite"/>'
-        f'<animate attributeName="opacity" values=".55;0" dur="3.2s" begin="{b}s" repeatCount="indefinite"/></circle>'
-        for b in (0, 1.6)
-    )
-    nodes += (
-        f'{pulses}<polygon points="{hexagon}" fill="{t["surface"]}" stroke="url(#acc)" stroke-width="1.8" '
-        f'stroke-linejoin="round"/><circle cx="{cx}" cy="{cy}" r="5" fill="url(#acc)"/>'
-    )
-
-    # Negative delays put every line at its own phase of one shared 12 s cycle; the first starts visible.
-    roles = "".join(
-        f'<text class="role{"" if i else " first"}" style="animation-delay:{4 * i - 12 if i else 0}s" x="48" y="238" '
-        f'font-family="{MONO}" font-size="13.5" fill="{t["muted"]}"><tspan fill="{a2}">&#8250;</tspan> '
-        f"{escape(r)}</text>"
-        for i, r in enumerate(ROLES)
-    )
-
-    defs = (
-        gradient("acc", t["acc"], 520, 860)
-        + gradient("name", t["acc"], 48, 430)
-        + f'<radialGradient id="g1"><stop offset="0" stop-color="{a1}" stop-opacity="{t["glow"]}"/>'
-        f'<stop offset="1" stop-color="{a1}" stop-opacity="0"/></radialGradient>'
-        f'<radialGradient id="g2"><stop offset="0" stop-color="{a3}" stop-opacity="{t["glow"]}"/>'
-        f'<stop offset="1" stop-color="{a3}" stop-opacity="0"/></radialGradient>'
-        f'<pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">'
-        f'<circle cx="2" cy="2" r="1.1" fill="{t["dot"]}"/></pattern>'
-        '<radialGradient id="fade" gradientUnits="userSpaceOnUse" cx="690" cy="150" r="420">'
-        '<stop offset=".25" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>'
-        f'<mask id="vignette"><rect width="{w}" height="{h}" fill="url(#fade)"/></mask>'
-        "<style>"
-        ".role{opacity:0;animation:role 12s infinite}.first{opacity:1}"
-        "@keyframes role{0%,28%{opacity:1;transform:none}32%{opacity:0;transform:translateY(-7px)}"
-        "33%,96%{opacity:0;transform:translateY(7px)}100%{opacity:1;transform:none}}"
-        ".beat{animation:beat 2.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}"
-        "@keyframes beat{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:0;transform:scale(2.6)}}"
-        "@media (prefers-reduced-motion:reduce){.role,.beat{animation:none}"
-        ".motion{display:none}}"
-        "</style>"
-    )
-    body = (
-        f'<circle cx="640" cy="60" r="260" fill="url(#g1)"><animateTransform attributeName="transform" '
-        f'type="translate" values="0 0;60 40;-30 70;0 0" dur="26s" repeatCount="indefinite"/></circle>'
-        f'<circle cx="820" cy="280" r="240" fill="url(#g2)"><animateTransform attributeName="transform" '
-        f'type="translate" values="0 0;-70 -40;20 -80;0 0" dur="31s" repeatCount="indefinite"/></circle>'
-        f'<rect width="{w}" height="{h}" fill="url(#dots)" mask="url(#vignette)"/>'
-        f'{edges}<g class="motion">{packets}</g>{nodes}'
-        f'<circle class="beat" cx="54" cy="66" r="4" fill="{a1}"/><circle cx="54" cy="66" r="4" fill="{a1}"/>'
-        f'<text x="68" y="70.5" font-family="{MONO}" font-size="12.5" fill="{t["muted"]}">'
-        f"{LOGIN} · Kazakhstan · UTC+5</text>"
-        f'<text x="46" y="140" font-family="{SANS}" font-size="50" font-weight="800" letter-spacing="-1.5" '
-        f'fill="url(#name)">Asanali Bulatov</text>'
-        f'<text x="48" y="178" font-family="{SANS}" font-size="19" font-weight="500" fill="{t["fg"]}">'
-        "Senior DevOps / Site Reliability Engineer</text>"
-        f'<rect x="48" y="200" width="44" height="3" rx="1.5" fill="url(#name)"/>'
-        f"{roles}"
-    )
-    return frame(w, h, t, "Asanali Bulatov, Senior DevOps / Site Reliability Engineer", defs, body, radius=18)
 
 
 # --- stack --------------------------------------------------------------------
 
-def stack(t):
-    """The stack as an exploded isometric drawing: one slab per layer, labelled on the right."""
-    w, h = 880, 348
-    side, depth, gap = 140, 12, 54
-    kx, ky = 0.866, 0.21
-    ox, oy = 196, 30 + gap * (len(STACK) - 1)
-    half = side * kx
-    text_x = ox + half + 96
-
-    def at(x, y, z, drop=0):
-        return f"{ox + (x - y) * kx:.1f},{oy + (x + y) * ky - z + drop:.1f}"
-
-    rows = [oy + side * ky - gap * i for i in range(len(STACK))]
-    out = "".join(
-        f'<line x1="{x:.1f}" y1="{rows[0]:.1f}" x2="{x:.1f}" y2="{rows[-1]:.1f}" stroke="{t["muted"]}" '
-        'stroke-opacity=".4" stroke-dasharray="2 4"/>'
-        for x in (ox - half, ox + half)
-    )
-    labels = ""
-    for i, (name, tools, marks) in enumerate(STACK):
-        z, color, y = gap * i, mix(t["acc"], 1 - i / (len(STACK) - 1)), rows[i]
-        a, b, c, d = at(0, 0, z), at(side, 0, z), at(side, side, z), at(0, side, z)
-        b2, c2, d2 = at(side, 0, z, depth), at(side, side, z, depth), at(0, side, z, depth)
-        top = f"{a} {b} {c} {d}"
-        lines = "".join(
-            f'<polyline points="{" ".join(at(x * side / 128, py * side / 128, z) for x, py in path)}" fill="none" stroke="{color}" '
-            'stroke-opacity=".6" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round"/>'
-            for path in marks
-        )
-        out += (
-            f'<polygon points="{a} {b} {b2} {c2} {d2} {d}" fill="{t["surface"]}"/>'
-            f'<polygon points="{d} {c} {c2} {d2}" fill="{color}" fill-opacity=".34"/>'
-            f'<polygon points="{c} {b} {b2} {c2}" fill="{color}" fill-opacity=".2"/>'
-            f'<polygon points="{top}" fill="{color}" fill-opacity=".1"/>'
-            f'<polygon class="pulse" style="animation-delay:{i * 0.45:.2f}s" points="{top}" fill="{color}" opacity="0"/>'
-            f'{lines}<path d="M{a} L{b} L{c} L{d} Z M{d} L{d2} L{c2} L{b2} L{b} M{c} L{c2}" fill="none" '
-            f'stroke="{color}" stroke-width="1.2" stroke-linejoin="round"/>'
-        )
-        labels += (
-            f'<circle cx="{ox + half:.1f}" cy="{y:.1f}" r="2.6" fill="{color}"/>'
-            f'<line x1="{ox + half + 8:.1f}" y1="{y:.1f}" x2="{text_x - 12:.1f}" y2="{y:.1f}" stroke="{t["muted"]}" '
-            'stroke-opacity=".55"/>'
-            f'<text x="{text_x:.1f}" y="{y + 4.5:.1f}" font-family="{MONO}" font-size="11" fill="{color}">{i + 1:02d}</text>'
-            f'<text x="{text_x + 28:.1f}" y="{y + 5:.1f}" font-family="{SANS}" font-size="15" font-weight="700" '
-            f'fill="{t["fg"]}">{name}</text>'
-            f'<text x="{text_x + 28:.1f}" y="{y + 23:.1f}" font-family="{MONO}" font-size="12.5" fill="{t["muted"]}">'
-            f'{escape(" · ".join(tools))}</text>'
-        )
-    defs = (
-        "<style>.pulse{animation:pulse 6s ease-out infinite}"
-        "@keyframes pulse{0%,30%,100%{opacity:0}7%{opacity:.42}}"
-        "@media (prefers-reduced-motion:reduce){.pulse{animation:none}}</style>"
-    )
-    label = "The stack, bottom up: " + "; ".join(f'{name}: {", ".join(tools)}' for name, tools, _ in STACK)
-    return frame(w, h, t, label, defs, out + labels)
+def stack(c):
+    s = Sketch(880, 292, c, seed=23)
+    column, gap, floor = 190, 34, 206
+    for i, (name, fill, tools) in enumerate(STACK):
+        x = 8 + i * (column + gap)
+        top = floor - 72 - 28 * len(tools)
+        s.rect(x, top, column, floor - top, fill=c[fill])
+        width = s.text(name, x + 20, top + 40, 27)
+        s.line(x + 20, top + 49, x + 23 + width, top + 48, width=1.5)
+        for row, tool in enumerate(tools):
+            s.text(tool, x + 20, top + 82 + row * 28, 19.5)
+        if i:
+            s.arrow([(x - gap + 5, floor - 60), (x - 5, floor - 60)], head=8)
+        if name == STACK_NOTE[0]:
+            for row, line in enumerate(STACK_NOTE[1]):
+                s.text(line, x + 56, top - 48 + row * 20, 16, c["blue"])
+            s.arrow([(x + 48, top - 40), (x + 31, top - 28), (x + 29, top - 6)], c["blue"], 1.6, head=8)
+    s.rect(8, floor + 16, 862, 58, fill=c["ash"])
+    s.text("host:  " + "  ·  ".join(HOST), 440, floor + 53, 23, anchor="middle")
+    label = "The stack: " + "; ".join(f'{name}: {", ".join(tools)}' for name, _, tools in STACK)
+    return s.svg(f'{label}; all of it on {", ".join(HOST)}.')
 
 
-# --- activity -----------------------------------------------------------------
+# --- year ---------------------------------------------------------------------
 
-OPACITY = (0, 0.3, 0.52, 0.76, 1)
-MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+def shade(pen, x, y, size, level):
+    """One calendar day: a boxed square, hatched closer the busier the day. Returns (outline, hatching)."""
+    corners = [(x + dx + pen.jitter(0.5), y + dy + pen.jitter(0.5)) for dx, dy in ((0, 0), (size, 0), (size, size), (0, size))]
+    outline = "M" + "L".join(f"{px:.1f} {py:.1f}" for px, py in corners) + "Z"
+    if not level:
+        return outline, ""
+    inner = [(x + 1, y + 1), (x + size - 1, y + 1), (x + size - 1, y + size - 1), (x + 1, y + size - 1)]
+    return outline, pen.hachure(inner, (5.0, 3.6, 2.7, 2.0)[level - 1], ticks=True)[0]
 
 
-def activity(calendar, t):
-    w, h = 880, 236
+def year(c, calendar):
     weeks = calendar["weeks"]
-    cell, pitch = 11, 14.6
-    gx, gy = (w - len(weeks) * pitch + (pitch - cell)) / 2 + 12, 96
-
-    days = [d for week in weeks for d in week["contributionDays"]]
-    counts = [d["contributionCount"] for d in days]
+    days = [(i, day) for i, week in enumerate(weeks) for day in week["contributionDays"]]
+    counts = [day["contributionCount"] for _, day in days]
     # Quartiles of the active days, so one huge day cannot flatten the rest.
-    active = sorted(c for c in counts if c)
+    active = sorted(n for n in counts if n)
     cuts = [active[len(active) * q // 4] for q in (1, 2, 3)] if active else []
-    longest = streak = 0
-    for c in counts:
-        streak = streak + 1 if c else 0
-        longest = max(longest, streak)
-    best = max(days, key=lambda d: d["contributionCount"])
-    best_day = date.fromisoformat(best["date"])
-    stats = [
-        (f"{sum(1 for c in counts if c)}/{len(counts)}", "active days"),
-        (f"{longest} days", "longest streak"),
-        (f'{best["contributionCount"]:,}', f"best day, {MONTHS[best_day.month - 1]} {best_day.day}"),
-    ]
+    run = longest = end = 0
+    for i, n in enumerate(counts):
+        run = run + 1 if n else 0
+        if run > longest:
+            longest, end = run, i
+    best_week, best = max(days, key=lambda item: item[1]["contributionCount"])
 
-    columns, labels, month = "", "", None
+    s = Sketch(880, 280, c, seed=37)
+    pitch, cell, gx, gy = 14.6, 11, 64, 122
+    bottom = gy + 6 * pitch + cell
+
+    total = f'{calendar["totalContributions"]:,}'
+    width = s.text(total, 8, 62, 50, wobble=1)
+    s.text("contributions in the last year", 8 + width + 18, 62, 21)
+    s.text(f"{len(active)} of {len(counts)} days active", 858, 62, 18, c["soft"], anchor="end")
+
+    grid, hatching, month, labels = "", [""] * 4, None, []
+    for i, day in days:
+        level = bool(day["contributionCount"]) + sum(day["contributionCount"] > cut for cut in cuts)
+        pen = Pen(zlib.crc32(day["date"].encode()))
+        outline, lines = shade(pen, gx + i * pitch, gy + day["weekday"] * pitch, cell, level)
+        grid += outline
+        if level:
+            hatching[level - 1] += lines
+    s.raw(f'<path d="{grid}" stroke="{c["grid"]}" stroke-width=".9"/>')
+    for level, lines in enumerate(hatching):
+        s.raw(f'<path d="{lines}" stroke="{c["levels"][level]}" stroke-width="{1 + level * 0.15:.2f}"/>')
+
     for i, week in enumerate(weeks):
-        x = gx + i * pitch
         first = date.fromisoformat(week["contributionDays"][0]["date"])
         if first.month != month and i < len(weeks) - 2:
             if month is not None or first.day <= 7:
-                labels += (
-                    f'<text x="{x:.1f}" y="{gy - 9}" font-family="{MONO}" font-size="10" fill="{t["muted"]}">'
-                    f"{MONTHS[first.month - 1]}</text>"
-                )
+                x = gx + i * pitch
+                labels.append((x, x + s.text(MONTHS[first.month - 1], x, bottom + 18, 14, c["soft"])))
             month = first.month
-        color, cells = mix(t["acc"], i / (len(weeks) - 1)), ""
-        for d in week["contributionDays"]:
-            level = bool(d["contributionCount"]) + sum(d["contributionCount"] > c for c in cuts)
-            fill = f'fill="{color}" fill-opacity="{OPACITY[level]}"' if level else f'fill="{t["fg"]}" fill-opacity="{t["empty"]}"'
-            cells += f'<rect x="{x:.1f}" y="{gy + d["weekday"] * pitch:.1f}" width="{cell}" height="{cell}" rx="2.6" {fill}/>'
-        columns += f'<g class="col" style="animation-delay:{i * 0.05:.2f}s">{cells}</g>'
+    for row, name in ((1, "Mon"), (3, "Wed"), (5, "Fri")):
+        s.text(name, gx - 9, gy + row * pitch + 9.5, 13, c["soft"], anchor="end")
 
-    weekdays = "".join(
-        f'<text x="{gx - 10:.1f}" y="{gy + row * pitch + 9:.1f}" font-family="{MONO}" font-size="9.5" '
-        f'fill="{t["muted"]}" text-anchor="end">{name}</text>'
-        for row, name in ((1, "Mon"), (3, "Wed"), (5, "Fri"))
+    if longest > 1:
+        x1 = gx + days[end - longest + 1][0] * pitch - 1
+        x2 = gx + days[end][0] * pitch + cell + 1
+        y = gy - 9
+        for a, b in (((x1, y + 6), (x1, y)), ((x1, y), (x2, y)), ((x2, y), (x2, y + 6))):
+            s.line(*a, *b, c["blue"], 1.6)
+        note = f"{longest} days in a row"
+        half = text_width(note, 16) / 2
+        s.text(note, min(max((x1 + x2) / 2, half + 8), 872 - half), y - 8, 16, c["blue"], anchor="middle")
+
+    # Legend on the left, the note about the best day right of it.
+    x = gx + s.text("less", gx, bottom + 44, 13, c["soft"]) + 7
+    for level in range(1, 5):
+        outline, lines = shade(Pen(level), x, bottom + 34, cell, level)
+        s.raw(f'<path d="{outline}" stroke="{c["grid"]}" stroke-width=".9"/>')
+        s.raw(f'<path d="{lines}" stroke="{c["levels"][level - 1]}" stroke-width="{1 + (level - 1) * 0.15:.2f}"/>')
+        x += pitch
+    s.text("more", x + 3, bottom + 44, 13, c["soft"])
+
+    when = date.fromisoformat(best["date"])
+    note = f'{best["contributionCount"]:,} on {MONTHS[when.month - 1]} {when.day}'
+    bx, by = gx + best_week * pitch + cell / 2, gy + best["weekday"] * pitch + cell / 2
+    s.ellipse(bx, by, 23, 23, c["red"], 1.6)
+    wide = text_width(note, 16)
+    left = bx - 30 - wide if bx > 440 else max(bx + 30, 224)
+    s.text(note, left, bottom + 46, 16, c["red"])
+    tail = left + wide + 6 if bx > 440 else left - 6
+    # The arrow climbs to the circled day straight up through a gap between the month names.
+    gate = next(
+        (x for step in range(13) for x in (bx - step * 6, bx + step * 6) if not any(a - 9 < x < b + 9 for a, b in labels)),
+        bx,
     )
-    right = gx + len(weeks) * pitch - (pitch - cell)
-    stat_text = ""
-    for i, (value, label) in enumerate(reversed(stats)):
-        x = right - i * 150
-        stat_text += (
-            f'<text x="{x:.1f}" y="40" font-family="{SANS}" font-size="17" font-weight="700" fill="{t["fg"]}" '
-            f'text-anchor="end">{value}</text>'
-            f'<text x="{x:.1f}" y="58" font-family="{MONO}" font-size="10.5" fill="{t["muted"]}" '
-            f'text-anchor="end">{label}</text>'
-        )
-    ly = gy + 7 * pitch + 8
-    legend = (
-        f'<text x="{right - 106:.1f}" y="{ly + 9:.1f}" font-family="{MONO}" font-size="9.5" '
-        f'fill="{t["muted"]}" text-anchor="end">less</text>'
-        f'<text x="{right:.1f}" y="{ly + 9:.1f}" font-family="{MONO}" font-size="9.5" '
-        f'fill="{t["muted"]}" text-anchor="end">more</text>'
-        f'<rect x="{right - 99:.1f}" y="{ly:.1f}" width="{cell}" height="{cell}" rx="2.6" fill="{t["fg"]}" '
-        f'fill-opacity="{t["empty"]}"/>'
-    ) + "".join(
-        f'<rect x="{right - 99 + level * 14:.1f}" y="{ly:.1f}" width="{cell}" height="{cell}" rx="2.6" '
-        f'fill="{t["acc"][1]}" fill-opacity="{OPACITY[level]}"/>'
-        for level in range(1, 5)
+    route = [(tail, bottom + 41), (gate, bottom + 30), (gate, bottom + 5), ((gate + 3 * bx) / 4, by + 15)]
+    s.arrow(route, c["red"], 1.6, head=8)
+
+    return s.svg(
+        f"{total} contributions in the last year, {len(active)} of {len(counts)} days active, "
+        f"longest streak {longest} days, best day {note}."
     )
-    total = f'{calendar["totalContributions"]:,}'
-    defs = (
-        gradient("acc", t["acc"], gx - 30, gx + 150)
-        + "<style>.col{animation:sweep 9s linear infinite}"
-        "@keyframes sweep{0%,12%,100%{opacity:1}5%{opacity:.4}}"
-        "@media (prefers-reduced-motion:reduce){.col{animation:none}}</style>"
-    )
-    body = (
-        f'<text x="{gx - 31:.1f}" y="48" font-family="{SANS}" font-size="34" font-weight="800" letter-spacing="-1" '
-        f'fill="url(#acc)">{total}</text>'
-        f'<text x="{gx - 30:.1f}" y="68" font-family="{MONO}" font-size="11" fill="{t["muted"]}">'
-        "contributions in the last year</text>"
-        f"{stat_text}{labels}{weekdays}{columns}{legend}"
-    )
-    return frame(w, h, t, f"{total} contributions in the last year", defs, body)
+
+
+# --- headings -------------------------------------------------------------------
+
+def title(c, text):
+    width = text_width(text, 30)
+    s = Sketch(math.ceil(width) + 14, 48, c, seed=zlib.crc32(text.encode()))
+    s.text(text, 4, 32, 30, wobble=0.6)
+    underline(s, 5, 42, width, 2)
+    return s.svg(text)
 
 
 def main():
-    data = fetch()
-    calendar = data["user"]["contributionsCollection"]["contributionCalendar"]
+    calendar = fetch()
     ASSETS.mkdir(exist_ok=True)
-    for name, t in THEMES.items():
+    for name, c in THEMES.items():
         files = {
-            "hero": hero(t),
-            "stack": stack(t),
-            "activity": activity(calendar, t),
+            "hero": hero(c),
+            "stack": stack(c),
+            "year": year(c, calendar),
+            "title-upstream": title(c, "Upstream"),
+            "title-stack": title(c, "The stack"),
+            "title-year": title(c, "Last 12 months"),
         }
         for stem, svg in files.items():
             (ASSETS / f"{stem}-{name}.svg").write_text(svg)
