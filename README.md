@@ -16,8 +16,6 @@
 
 I run Kubernetes platforms and the delivery pipelines around them. Currently at [Higgsfield AI](https://higgsfield.ai), on GPU clusters for AI workloads; before that, payment systems for banks. On the side I write small tools and release them the way I want production software shipped: signed, with build provenance and an SBOM.
 
-### Things I've built
-
 <a href="https://github.com/krax1337/brownnoise"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/card-brownnoise-dark.svg"><img src="assets/card-brownnoise-light.svg" width="49.9%" alt="brownnoise: endless, gapless white, pink and brown noise, generated live in your terminal"></picture></a><a href="https://github.com/krax1337/mcp-server-zenmoney"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/card-mcp-server-zenmoney-dark.svg"><img src="assets/card-mcp-server-zenmoney-light.svg" width="49.9%" alt="mcp-server-zenmoney: an MCP server that lets AI agents read and update ZenMoney finances"></picture></a>
 <a href="https://github.com/krax1337/notation-aws-verifier"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/card-notation-aws-verifier-dark.svg"><img src="assets/card-notation-aws-verifier-light.svg" width="49.9%" alt="notation-aws-verifier: Kyverno extension that admits only AWS Signer / Notation signed images to a cluster"></picture></a><a href="https://github.com/krax1337/omp-auto-effort-floor"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/card-omp-auto-effort-floor-dark.svg"><img src="assets/card-omp-auto-effort-floor-light.svg" width="49.9%" alt="omp-auto-effort-floor: a minimum reasoning effort for the auto thinking mode of the omp coding agent"></picture></a>
 
